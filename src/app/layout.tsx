@@ -15,11 +15,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
-      <body className="min-h-screen bg-background font-sans antialiased">
-        <Navbar />
-        <main>{children}</main>
-      </body>
+    <html lang="en">
+      <body>{children}</body>
     </html>
   );
 }
