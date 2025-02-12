@@ -4,9 +4,9 @@ import { useState } from 'react';
 import { Session, ReplayEvent } from '@/types/session';
 import {
   ArrowTopRightOnSquareIcon,
-  CursorClickIcon,
-  PencilSquareIcon,
   ArrowsUpDownIcon,
+  CursorArrowRaysIcon,
+  PencilSquareIcon,
   QuestionMarkCircleIcon,
 } from '@heroicons/react/24/outline';
 
@@ -157,7 +157,7 @@ function getEventIcon(type: string) {
     case 'navigation':
       return <ArrowTopRightOnSquareIcon className={className} />;
     case 'click':
-      return <CursorClickIcon className={className} />;
+      return <CursorArrowRaysIcon className={className} />;
     case 'input':
       return <PencilSquareIcon className={className} />;
     case 'scroll':
