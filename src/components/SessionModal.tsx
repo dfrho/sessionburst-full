@@ -9,6 +9,7 @@ import {
   PointerSensor,
   useSensor,
   useSensors,
+  DragEndEvent,
 } from '@dnd-kit/core';
 import {
   arrayMove,
@@ -23,6 +24,7 @@ import {
   PlusIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
+import { stagehand } from '@/lib/stagehand';
 
 type ActionType = 'goto' | 'act' | 'extract' | 'observe';
 type Action = {
@@ -31,7 +33,7 @@ type Action = {
   value: string;
 };
 
-function SortableRow({
+function ActionRow({
   action,
   onChangeAction,
   onRemove,
@@ -53,21 +55,6 @@ function SortableRow({
     transform: CSS.Transform.toString(transform),
     transition,
     zIndex: isDragging ? 1 : 0,
-  };
-
-  const getPlaceholder = (type: ActionType) => {
-    switch (type) {
-      case 'goto':
-        return 'https://example.com';
-      case 'act':
-        return 'click login button';
-      case 'extract':
-        return 'user profile data';
-      case 'observe':
-        return 'wait for element to appear';
-      default:
-        return '';
-    }
   };
 
   return (
@@ -106,7 +93,15 @@ function SortableRow({
         type="text"
         value={action.value}
         onChange={(e) => onChangeAction(action.id, 'value', e.target.value)}
-        placeholder={getPlaceholder(action.type)}
+        placeholder={
+          action.type === 'goto'
+            ? 'https://example.com'
+            : action.type === 'act'
+            ? 'click login button'
+            : action.type === 'extract'
+            ? 'user profile data'
+            : 'wait for element to appear'
+        }
         className="flex-1 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
       />
 
@@ -136,7 +131,11 @@ export default function SessionModal({ isOpen, onClose }: ModalProps) {
   const [error, setError] = useState<string | null>(null);
 
   const sensors = useSensors(
-    useSensor(PointerSensor),
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8, // 8px of movement required before drag starts
+      },
+    }),
     useSensor(KeyboardSensor, {
       coordinateGetter: sortableKeyboardCoordinates,
     })
@@ -165,9 +164,10 @@ export default function SessionModal({ isOpen, onClose }: ModalProps) {
     }
   };
 
-  const handleDragEnd = (event: any) => {
+  const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
-    if (active.id !== over?.id) {
+
+    if (over && active.id !== over.id) {
       setActions((items) => {
         const oldIndex = items.findIndex((item) => item.id === active.id);
         const newIndex = items.findIndex((item) => item.id === over.id);
@@ -187,9 +187,30 @@ export default function SessionModal({ isOpen, onClose }: ModalProps) {
     }
 
     try {
-      console.log('Actions:', actions);
+      const response = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          actions: actions.map(({ id, ...action }) => action), // Remove id from actions
+          options: {
+            browser: 'chromium', // Default to chromium, could make this configurable
+            device: 'desktop', // Default to desktop, could make this configurable
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Failed to create session');
+      }
+
+      const session = await response.json();
+      console.log('Session created:', session);
       onClose();
     } catch (err) {
+      console.error('Failed to create session:', err);
       setError('Failed to create session. Please try again.');
     }
   };
@@ -240,7 +261,7 @@ export default function SessionModal({ isOpen, onClose }: ModalProps) {
                     >
                       <div className="space-y-3">
                         {actions.map((action) => (
-                          <SortableRow
+                          <ActionRow
                             key={action.id}
                             action={action}
                             onChangeAction={handleActionChange}

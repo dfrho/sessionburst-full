@@ -1,0 +1,30 @@
+import { createServerComponentClient } from '@supabase/auth-helpers-nextjs';
+import { cookies } from 'next/headers';
+import SessionReplayViewer from '@/components/SessionReplayViewer';
+
+export default async function SessionPage({
+  params,
+}: {
+  params: { id: string };
+}) {
+  const supabase = createServerComponentClient({ cookies });
+
+  const { data: session } = await supabase
+    .from('sessions')
+    .select('*')
+    .eq('id', params.id)
+    .single();
+
+  if (!session) {
+    return <div>Session not found</div>;
+  }
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <h1 className="text-2xl font-semibold text-gray-900 mb-6">
+        Session Replay
+      </h1>
+      <SessionReplayViewer session={session} />
+    </div>
+  );
+}
