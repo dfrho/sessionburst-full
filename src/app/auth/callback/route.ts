@@ -1,12 +1,22 @@
-import { createServerClient, type CookieOptions } from '@supabase/ssr'
-import { NextResponse, type NextRequest } from 'next/server'
+import { createServerClient } from '@supabase/ssr'
+import { cookies } from 'next/headers'
+import { NextResponse } from 'next/server'
+import { CookieOptions } from 'next/headers'
 
-export async function GET(request: NextRequest) {
-  const requestUrl = new URL(request.url)
-  const code = requestUrl.searchParams.get('code')
-  
-  if (code) {
-    const response = NextResponse.redirect(new URL('/dashboard', request.url))
+export async function GET(request: Request) {
+  try {
+    const requestUrl = new URL(request.url)
+    const code = requestUrl.searchParams.get('code')
+    const next = requestUrl.searchParams.get('next') ?? '/dashboard'
+
+    // If no code is present, redirect to login immediately
+    if (!code) {
+      console.log('No code provided in callback')
+      return NextResponse.redirect(new URL('/auth/login', request.url))
+    }
+
+    const cookieStore = await cookies()
+    const response = NextResponse.redirect(new URL(next, request.url))
     
     const supabase = createServerClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -14,13 +24,16 @@ export async function GET(request: NextRequest) {
       {
         cookies: {
           get(name: string) {
-            return request.cookies.get(name)?.value
+            return cookieStore.get(name)?.value
           },
           set(name: string, value: string, options: CookieOptions) {
             response.cookies.set({
               name,
               value,
               ...options,
+              path: '/',
+              sameSite: 'lax',
+              secure: process.env.NODE_ENV === 'production',
             })
           },
           remove(name: string, options: CookieOptions) {
@@ -28,6 +41,8 @@ export async function GET(request: NextRequest) {
               name,
               value: '',
               ...options,
+              path: '/',
+              maxAge: 0,
             })
           },
         },
@@ -37,9 +52,28 @@ export async function GET(request: NextRequest) {
     const { error } = await supabase.auth.exchangeCodeForSession(code)
     
     if (!error) {
+      // Get the session after successful auth
+      const { data: { session } } = await supabase.auth.getSession()
+      
+      if (session) {
+        // Store the auth token for Browserbase
+        response.cookies.set('browserbase-token', session.access_token, {
+          path: '/',
+          sameSite: 'lax',
+          secure: process.env.NODE_ENV === 'production',
+        })
+      }
+      
       return response
     }
-  }
 
-  return NextResponse.redirect(new URL('/auth/login', request.url))
+    // Authentication failed
+    console.error('Auth error:', error)
+    return NextResponse.redirect(new URL('/auth/login', request.url))
+
+  } catch (error) {
+    // Catch any unexpected errors
+    console.error('Unexpected error in auth callback:', error)
+    return NextResponse.redirect(new URL('/auth/login', request.url))
+  }
 }
