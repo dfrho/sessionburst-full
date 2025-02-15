@@ -4,35 +4,108 @@ import { useState, useEffect } from 'react';
 import { Session } from '@/lib/types/supabase';
 import { formatDistanceToNow } from 'date-fns';
 import SessionModal from '@/components/SessionModal';
+import { createClient } from '@/lib/supabase';
+import Link from 'next/link';
+import { User } from '@supabase/supabase-js';
 
 export default function DashboardClient() {
+  const [user, setUser] = useState<User | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [recentSessions, setRecentSessions] = useState<Session[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const supabase = createClient();
 
   useEffect(() => {
-    fetchRecentSessions();
-  }, []);
+    // Immediately check auth state
+    const checkAuth = async () => {
+      console.log('Checking auth state...');
+      const {
+        data: { user: currentUser },
+        error,
+      } = await supabase.auth.getUser();
+      console.log('Auth check result:', { currentUser, error });
 
-  const fetchRecentSessions = async () => {
+      if (currentUser) {
+        console.log('User is authenticated:', currentUser.id);
+        setUser(currentUser);
+        fetchRecentSessions(currentUser.id);
+      } else {
+        console.log('No authenticated user found');
+        setUser(null);
+        setIsLoading(false);
+      }
+    };
+
+    checkAuth();
+
+    // Set up auth state change listener
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log('Auth state changed:', event, session?.user?.id);
+      setUser(session?.user ?? null);
+      if (session?.user) {
+        fetchRecentSessions(session.user.id);
+      } else {
+        setRecentSessions([]);
+        setIsLoading(false);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [supabase.auth]);
+
+  const fetchRecentSessions = async (userId: string) => {
+    console.log('Fetching sessions for user:', userId);
     try {
-      const response = await fetch('/api/sessions?limit=5&days=7');
+      const response = await fetch(`/api/sessions?limit=5&days=7`);
+      console.log('Sessions API response status:', response.status);
+
+      const responseText = await response.text();
+      console.log('Raw API response:', responseText);
+
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (e) {
+        console.error('Failed to parse JSON response:', e);
+        return;
+      }
+
+      console.log('Parsed sessions data:', data);
+
       if (response.status === 401) {
-        // Handle unauthorized access
         console.error('Unauthorized access to sessions');
         setRecentSessions([]);
         return;
       }
-      if (!response.ok) throw new Error('Failed to fetch sessions');
-      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch sessions: ${response.status}`);
+      }
+
       setRecentSessions(data.sessions || []);
     } catch (error) {
       console.error('Error fetching recent sessions:', error);
-      setRecentSessions([]); // Reset sessions on error
+      setRecentSessions([]);
     } finally {
       setIsLoading(false);
     }
   };
+
+  if (isLoading) {
+    return <div className="text-center py-4">Loading...</div>;
+  }
+
+  if (!user) {
+    return (
+      <div className="text-center py-4">
+        Please sign in to view your sessions.
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -121,12 +194,12 @@ export default function DashboardClient() {
                   </div>
                 ))}
                 <div className="text-center pt-4">
-                  <a
+                  <Link
                     href="/sessions"
                     className="text-sm font-medium text-indigo-600 hover:text-indigo-500"
                   >
                     View all sessions →
-                  </a>
+                  </Link>
                 </div>
               </div>
             ) : (

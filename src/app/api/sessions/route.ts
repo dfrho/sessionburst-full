@@ -1,6 +1,6 @@
-import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
-import { stagehand } from '@/lib/stagehand'
+import { createServerClient, type CookieOptions } from '@supabase/ssr'
+import { StagehandClient } from '@/lib/stagehand'
 import { createRouteHandlerClient } from '@supabase/auth-helpers-nextjs'
 import { cookies } from 'next/headers'
 
@@ -17,8 +17,10 @@ async function invalidateSessionsCache() {
 }
 
 export async function POST(request: NextRequest) {
+  console.log('Session POST started'); // Debug point 1
   const response = NextResponse.next()
   
+  // Replace Supabase client initialization
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -44,21 +46,57 @@ export async function POST(request: NextRequest) {
       },
     }
   )
+  
+  // Initialize Stagehand client with API key
+  const stagehand = new StagehandClient({
+    apiKey: process.env.BROWSERBASE_API_KEY!
+  });
 
   try {
-    const { data: { session } } = await supabase.auth.getSession()
-    if (!session) {
+    const { data: { user } } = await supabase.auth.getUser();
+    console.log('User auth check:', user ? 'authenticated' : 'not authenticated'); // Debug point 4
+    
+    if (!user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const body = await request.json()
+    console.log('Request body:', body); // Debug point 5
+    
+    // Create session in Stagehand first
+    console.log('Creating Stagehand session...'); // Debug point 6
     const stagehandResponse = await stagehand.createSession(body)
+    console.log('Stagehand response:', stagehandResponse); // Debug point 7
+    
+    if (!stagehandResponse?.sessionId) {
+      throw new Error('Failed to get sessionId from Stagehand')
+    }
 
-    return NextResponse.json(stagehandResponse)
+    // Only if Stagehand succeeds, store in Supabase
+    console.log('Storing in Supabase...'); // Debug point 8
+    const { data: sessionData, error: supabaseError } = await supabase
+      .from('sessions')
+      .insert({
+        user_id: user.id,
+        stagehand_session_id: stagehandResponse.sessionId,
+        actions: body.actions,
+        options: body.options,
+        status: 'running'
+      })
+      .select()
+      .single()
+
+    if (supabaseError) {
+      console.error('Supabase error:', supabaseError); // Debug point 9
+      throw supabaseError
+    }
+
+    console.log('Session created successfully:', sessionData); // Debug point 10
+    return NextResponse.json({ ...stagehandResponse, session: sessionData })
   } catch (error) {
     console.error('Session creation failed:', error)
     return NextResponse.json(
-      { error: 'Failed to create session' },
+      { error: error instanceof Error ? error.message : 'Failed to create session' },
       { status: 500 }
     )
   }
@@ -105,71 +143,32 @@ export async function PUT(request: Request) {
   }
 }
 
-export async function GET(request: Request) {
-  const cookieStore = cookies();
+export const dynamic = 'force-dynamic'
+
+export async function GET(request: NextRequest) {
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
       cookies: {
         get(name: string) {
-          const cookie = cookieStore.get(name);
-          return cookie?.value;
-        },
-        set(name: string, value: string, options: CookieOptions) {
-          cookieStore.set(name, value, options);
-        },
-        remove(name: string, options: CookieOptions) {
-          cookieStore.set(name, '', options);
-        },
+          return request.cookies.get(name)?.value
+        }
       },
     }
-  );
-  
-  try {
-    const { searchParams } = new URL(request.url);
-    const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '10');
-    const days = parseInt(searchParams.get('days') || '30');
-    const status = searchParams.get('status');
+  )
 
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  const { data: { user } } = await supabase.auth.getUser()
 
-    // Calculate the date for filtering
-    const fromDate = new Date();
-    fromDate.setDate(fromDate.getDate() - days);
-
-    let query = supabase
-      .from('sessions')
-      .select('*', { count: 'exact' })  // Add count to get total
-      .eq('user_id', session.user.id)
-      .gte('created_at', fromDate.toISOString())
-      .order('created_at', { ascending: false })
-      .range((page - 1) * limit, page * limit - 1);  // Use range for pagination
-
-    if (status && status !== 'all') {
-      query = query.eq('status', status);
-    }
-
-    const { data: sessions, error, count } = await query;
-
-    if (error) throw error;
-
-    return NextResponse.json({
-      sessions,
-      page,
-      limit,
-      total: count
-    });
-
-  } catch (err) {
-    console.error('Error fetching sessions:', err);
-    return NextResponse.json(
-      { error: 'Failed to fetch sessions' },
-      { status: 500 }
-    );
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+
+  const { data: sessions } = await supabase
+    .from('sessions')
+    .select('*')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false })
+
+  return NextResponse.json({ sessions: sessions || [] })
 }

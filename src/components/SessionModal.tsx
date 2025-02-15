@@ -24,7 +24,7 @@ import {
   PlusIcon,
   TrashIcon,
 } from '@heroicons/react/24/outline';
-import { stagehand } from '@/lib/stagehand';
+import { generateUtm } from '@/lib/utils/generateUtm';
 
 type ActionType = 'goto' | 'act' | 'extract' | 'observe';
 type Action = {
@@ -76,18 +76,20 @@ function ActionRow({
         <GripVerticalIcon className="h-5 w-5" />
       </button>
 
-      <select
-        value={action.type}
-        onChange={(e) =>
-          onChangeAction(action.id, 'type', e.target.value as ActionType)
-        }
-        className="w-28 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
-      >
-        <option value="goto">goto</option>
-        <option value="act">act</option>
-        <option value="extract">extract</option>
-        <option value="observe">observe</option>
-      </select>
+      <div className="text-gray-700">
+        <select
+          value={action.type}
+          onChange={(e) =>
+            onChangeAction(action.id, 'type', e.target.value as ActionType)
+          }
+          className="mt-1 block w-32 rounded-md border-gray-500 shadow-sm text-gray-700 bg-white focus:border-blue-500 focus:ring-blue-500"
+        >
+          <option value="goto">goto</option>
+          <option value="act">act</option>
+          <option value="extract">extract</option>
+          <option value="observe">observe</option>
+        </select>
+      </div>
 
       <input
         type="text"
@@ -102,7 +104,7 @@ function ActionRow({
             ? 'user profile data'
             : 'wait for element to appear'
         }
-        className="flex-1 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+        className="mt-1 block w-full rounded-md border-gray-500 shadow-sm text-gray-700 bg-white focus:border-blue-500 focus:ring-blue-500"
       />
 
       <button
@@ -128,6 +130,7 @@ export default function SessionModal({ isOpen, onClose }: ModalProps) {
     { id: '3', type: 'extract', value: '' },
     { id: '4', type: 'observe', value: '' },
   ]);
+  const [sessionCount, setSessionCount] = useState(1);
   const [error, setError] = useState<string | null>(null);
 
   const sensors = useSensors(
@@ -180,38 +183,60 @@ export default function SessionModal({ isOpen, onClose }: ModalProps) {
     e.preventDefault();
     setError(null);
 
-    const gotoAction = actions.find((a) => a.type === 'goto');
-    if (!gotoAction?.value) {
-      setError('Please enter a target domain in the goto field');
-      return;
-    }
-
     try {
+      const sessionData = {
+        actions: actions.map(({ ...action }) => action),
+        options: {
+          browser: 'chromium',
+          device: 'desktop',
+          utm_params: generateUtm(),
+        },
+      };
+
+      // Create one session first to test
       const response = await fetch('/api/sessions', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          actions: actions.map(({ id, ...action }) => action), // Remove id from actions
-          options: {
-            browser: 'chromium', // Default to chromium, could make this configurable
-            device: 'desktop', // Default to desktop, could make this configurable
-          },
-        }),
+        body: JSON.stringify(sessionData),
       });
 
+      const data = await response.json();
+
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Failed to create session');
+        throw new Error(data.error || 'Failed to create session');
       }
 
-      const session = await response.json();
-      console.log('Session created:', session);
+      // If first one succeeds, create the rest
+      if (sessionCount > 1) {
+        const remainingPromises = Array.from({ length: sessionCount - 1 }, () =>
+          fetch('/api/sessions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(sessionData),
+          }).then(async (response) => {
+            if (!response.ok) {
+              const error = await response.json();
+              throw new Error(error.message || 'Failed to create session');
+            }
+            return response.json();
+          })
+        );
+
+        await Promise.all(remainingPromises);
+      }
+
       onClose();
     } catch (err) {
-      console.error('Failed to create session:', err);
-      setError('Failed to create session. Please try again.');
+      console.error('Detailed error:', err);
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Failed to create sessions. Please try again.'
+      );
     }
   };
 
@@ -246,10 +271,35 @@ export default function SessionModal({ isOpen, onClose }: ModalProps) {
                   as="h3"
                   className="text-lg font-medium leading-6 text-gray-900"
                 >
-                  Create New Session
+                  Create New Session Burst
                 </Dialog.Title>
 
                 <form onSubmit={handleSubmit} className="mt-4">
+                  <div className="mb-4">
+                    <label
+                      htmlFor="sessionCount"
+                      className="block text-sm font-medium text-gray-700"
+                    >
+                      Number of Sessions
+                    </label>
+                    <input
+                      type="number"
+                      id="sessionCount"
+                      min="1"
+                      max="50"
+                      value={sessionCount}
+                      onChange={(e) =>
+                        setSessionCount(
+                          Math.min(
+                            50,
+                            Math.max(1, parseInt(e.target.value) || 1)
+                          )
+                        )
+                      }
+                      className="text-gray-700 mt-1 block w-32 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                    />
+                  </div>
+
                   <DndContext
                     sensors={sensors}
                     collisionDetection={closestCenter}
