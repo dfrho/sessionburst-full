@@ -14,13 +14,17 @@ export async function middleware(request: NextRequest) {
     {
       cookies: {
         get(name: string) {
-          return request.cookies.get(name)?.value
+          const cookie = request.cookies.get(name)
+          return cookie?.value
         },
         set(name: string, value: string, options: CookieOptions) {
           response.cookies.set({
             name,
             value,
             ...options,
+            path: '/',
+            sameSite: 'lax',
+            secure: process.env.NODE_ENV === 'production',
           })
         },
         remove(name: string, options: CookieOptions) {
@@ -28,28 +32,28 @@ export async function middleware(request: NextRequest) {
             name,
             value: '',
             ...options,
+            path: '/',
+            maxAge: 0,
           })
         },
       },
     }
   )
 
-  const { data: { session } } = await supabase.auth.getSession()
+  // Get authenticated user securely
+  const { data: { user } } = await supabase.auth.getUser()
 
-  // Allow access to auth callback route
+  // Don't touch the callback route at all
   if (request.nextUrl.pathname.startsWith('/auth/callback')) {
     return response
   }
 
-  // If user is not signed in and the current path is not /auth/login,
-  // redirect the user to /auth/login
-  if (!session && request.nextUrl.pathname !== '/auth/login') {
+  // Protected routes
+  if (!user && request.nextUrl.pathname !== '/auth/login') {
     return NextResponse.redirect(new URL('/auth/login', request.url))
   }
 
-  // If user is signed in and the current path is /auth/login,
-  // redirect the user to /dashboard
-  if (session && request.nextUrl.pathname === '/auth/login') {
+  if (user && request.nextUrl.pathname === '/auth/login') {
     return NextResponse.redirect(new URL('/dashboard', request.url))
   }
 

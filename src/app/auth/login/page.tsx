@@ -5,11 +5,15 @@ import { createClient } from '@/lib/supabase';
 export default function LoginPage() {
   const supabase = createClient();
 
-  const handleSignIn = (provider: 'google' | 'github') => {
-    supabase.auth.signInWithOAuth({
+  const handleSignIn = async (provider: 'google' | 'github') => {
+    await supabase.auth.signInWithOAuth({
       provider,
       options: {
         redirectTo: `${window.location.origin}/auth/callback`,
+        queryParams: {
+          access_type: 'offline',
+          prompt: 'consent',
+        },
       },
     });
   };
