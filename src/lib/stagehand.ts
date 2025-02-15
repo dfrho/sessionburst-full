@@ -1,12 +1,4 @@
-import { chromium } from 'playwright-core';
-
-type StagehandConfig = {
-  projectId: string;
-  apiKey: string;
-  llmProvider: 'openai' | 'anthropic';
-  llmApiKey: string;
-  baseUrl?: string;
-}
+import { chromium } from 'playwright';
 
 type SessionAction = {
   type: 'goto' | 'act' | 'extract' | 'observe';
@@ -29,38 +21,48 @@ type CreateSessionRequest = {
 export class StagehandClient {
   private apiKey: string;
 
-  constructor(config: StagehandConfig) {
+  constructor(config: { apiKey: string }) {
     if (!config.apiKey) {
-      throw new Error('Missing required Stagehand configuration')
+      throw new Error('Missing required Stagehand configuration');
     }
     this.apiKey = config.apiKey;
   }
 
   async createSession(request: CreateSessionRequest) {
     try {
-      const browser = await chromium.connectOverCDP(
-        `wss://connect.browserbase.com?apiKey=${this.apiKey}`
-      );
+      const browser = await chromium.connect({
+        wsEndpoint: `wss://connect.browserbase.com?apiKey=${this.apiKey}`
+      });
+      
+      const context = browser.contexts[0];
+      const page = context.pages[0];
 
-      // Getting the default context to ensure the sessions are recorded
-      const defaultContext = browser.contexts()[0];
-      const page = defaultContext.pages()[0];
-
-      // Execute each action sequentially
       for (const action of request.actions) {
         if (action.type === 'goto') {
           await page.goto(action.value);
+          await page.waitForLoadState('networkidle');
         } else if (action.type === 'act') {
-          await page.evaluate(action.value);
+          await page.act({ action: action.value });
+          await page.waitForLoadState('networkidle');
         } else if (action.type === 'extract') {
-          await page.evaluate(action.value);
+          await page.extract({
+            instruction: action.value,
+            schema: action.schema
+          });
         }
       }
 
-      await page.close();
+      const sessionId = context.browser().connectOptions().wsEndpoint?.split('sessions/')?.[1];
       await browser.close();
 
-      return { success: true };
+      if (!sessionId) {
+        throw new Error('Failed to get BrowserBase session ID');
+      }
+
+      return { 
+        sessionId,
+        success: true 
+      };
     } catch (error) {
       console.error('Stagehand createSession error:', error);
       throw error;
@@ -102,4 +104,15 @@ export function parsePrompt(prompt: string): StagehandAction[] {
   }
 
   return actions
-} 
+}
+
+async function createBrowserSession() {
+  const browser = await chromium.connect({
+    wsEndpoint: `wss://connect.browserbase.com?apiKey=${process.env.BROWSERBASE_API_KEY}`
+  });
+  const context = browser.contexts[0];
+  const page = context.pages[0];
+  return { browser, context, page };
+}
+
+export { createBrowserSession };

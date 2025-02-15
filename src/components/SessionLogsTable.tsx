@@ -52,13 +52,6 @@ export default function SessionLogsTable() {
     }
   };
 
-  const formatId = (id: any): string => {
-    if (typeof id !== 'string') {
-      return 'Invalid ID';
-    }
-    return `${id.slice(0, 8)}...`;
-  };
-
   if (isLoading) return <div>Loading sessions...</div>;
   if (error) return <div className="text-red-600">Error: {error}</div>;
   if (!sessions || sessions.length === 0) {
