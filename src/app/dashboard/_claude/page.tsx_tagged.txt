@@ -1,0 +1,11 @@
+<document><source>page.tsx</source><document_content>import { Suspense } from 'react';
+import DashboardClient from './DashboardClient';
+
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <DashboardClient />
+    </Suspense>
+  );
+}
+</document_content></document>

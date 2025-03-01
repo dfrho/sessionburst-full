@@ -1,8 +1,11 @@
-import { chromium } from 'playwright';
+import { Stagehand } from "@browserbasehq/stagehand";
+import { Browserbase } from "@browserbasehq/sdk";
+import { z } from "zod";
 
 type SessionAction = {
   type: 'goto' | 'act' | 'extract' | 'observe';
   value: string;
+  schema?: z.ZodType<unknown>;
 }
 
 type CreateSessionRequest = {
@@ -11,6 +14,7 @@ type CreateSessionRequest = {
     browser?: 'chromium' | 'firefox' | 'webkit';
     device?: string;
     location?: string;
+    utm_params?: Record<string, string>;
     context?: {
       extensions?: boolean;
       captchaSolving?: boolean;
@@ -20,99 +24,134 @@ type CreateSessionRequest = {
 
 export class StagehandClient {
   private apiKey: string;
+  private projectId: string;
+  private modelName: string;
+  private anthropicKey: string;
+  private browserbase: Browserbase;
 
-  constructor(config: { apiKey: string }) {
+  constructor(config: { 
+    apiKey: string;
+    projectId?: string;
+    modelName?: string;
+    anthropicKey?: string;
+  }) {
     if (!config.apiKey) {
-      throw new Error('Missing required Stagehand configuration');
+      throw new Error('Missing required Stagehand configuration: apiKey');
     }
+
     this.apiKey = config.apiKey;
+    this.projectId = config.projectId || process.env.BROWSERBASE_PROJECT_ID || '';
+    this.modelName = config.modelName || 'claude-3-5-sonnet-latest';
+    this.anthropicKey = config.anthropicKey || process.env.ANTHROPIC_API_KEY || '';
+    
+    // Log available API keys (without showing the actual values)
+    console.log('API Keys available:');
+    console.log('- Browserbase:', this.apiKey ? '✓' : '✗');
+    console.log('- Anthropic:', this.anthropicKey ? '✓' : '✗');
+    
+    // Initialize the Browserbase SDK
+    this.browserbase = new Browserbase({ apiKey: this.apiKey });
   }
 
   async createSession(request: CreateSessionRequest) {
+    console.log('Starting session creation with Stagehand...');
+    let stagehandInstance: Stagehand | null = null;
+    
     try {
-      const browser = await chromium.connect({
-        wsEndpoint: `wss://connect.browserbase.com?apiKey=${this.apiKey}`
+      // Let Stagehand handle session creation
+      stagehandInstance = new Stagehand({
+        env: "BROWSERBASE",
+        apiKey: this.apiKey,
+        projectId: this.projectId,
+        modelName: this.modelName,
+        modelClientOptions: {
+          apiKey: this.anthropicKey,
+        }
       });
       
-      const context = browser.contexts[0];
-      const page = context.pages[0];
-
+      // Initialize and use the session
+      console.log('Initializing Stagehand...');
+      await stagehandInstance.init();
+      
+      const page = stagehandInstance.page;
+      
+      // Set timeout for navigations (30 seconds)
+      page.setDefaultNavigationTimeout(30000);
+      page.setDefaultTimeout(30000);
+      
+      // Process each action in sequence
+      console.log(`Processing ${request.actions.length} actions...`);
+      
       for (const action of request.actions) {
+        console.log(`Processing action: ${action.type} - ${action.value}`);
+        
         if (action.type === 'goto') {
           await page.goto(action.value);
-          await page.waitForLoadState('networkidle');
-        } else if (action.type === 'act') {
-          await page.act({ action: action.value });
-          await page.waitForLoadState('networkidle');
-        } else if (action.type === 'extract') {
-          await page.extract({
-            instruction: action.value,
-            schema: action.schema
-          });
+          console.log(`Navigated to: ${action.value}`);
+          // Wait for load instead of networkidle
+          await page.waitForLoadState('load');
+        } 
+        else if (action.type === 'act') {
+          await page.act(action.value);
+          console.log(`Performed action: ${action.value}`);
+          // Only wait for load after actions
+          await page.waitForLoadState('load');
+          await page.waitForTimeout(1000); // Additional 1s delay
+        } 
+        else if (action.type === 'observe') {
+          const suggestions = await page.observe(action.value);
+          console.log(`Observed actions:`, suggestions);
+        } 
+        else if (action.type === 'extract') {
+          let extractResult;
+          
+          if (action.schema) {
+            extractResult = await page.extract({
+              instruction: action.value,
+              schema: action.schema
+            });
+          } else {
+            // Default schema if none provided
+            extractResult = await page.extract({
+              instruction: action.value,
+              schema: z.object({
+                result: z.any()
+              })
+            });
+          }
+          
+          console.log(`Extracted data:`, extractResult);
         }
       }
-
-      const sessionId = context.browser().connectOptions().wsEndpoint?.split('sessions/')?.[1];
-      await browser.close();
-
-      if (!sessionId) {
-        throw new Error('Failed to get BrowserBase session ID');
+      
+      // Take a screenshot before closing
+      try {
+        await page.screenshot({ path: `session-${this.projectId}.png` });
+        console.log('Screenshot saved');
+      } catch (screenshotError) {
+        console.error('Error taking screenshot:', screenshotError);
       }
-
-      return { 
-        sessionId,
-        success: true 
+      
+      // Close the browser session
+      await stagehandInstance.close();
+      stagehandInstance = null;
+      
+      return {
+        sessionId: this.projectId,
+        success: true
       };
+      
     } catch (error) {
-      console.error('Stagehand createSession error:', error);
+      console.error('Error in Stagehand session:', error);
       throw error;
     }
   }
 }
 
-// Initialize with only required fields
+// Export an initialized client for use throughout the app
 export const stagehand = new StagehandClient({
-  projectId: process.env.BROWSERBASE_PROJECT_ID!,
-  apiKey: process.env.BROWSERBASE_API_KEY!,
-  llmProvider: 'anthropic',  // This won't be used in requests
-  llmApiKey: process.env.ANTHROPIC_API_KEY!  // This won't be used in requests
+  apiKey: process.env.BROWSERBASE_API_KEY || '',
+  projectId: process.env.BROWSERBASE_PROJECT_ID || '',
+  modelName: 'claude-3-5-sonnet-latest',
+  anthropicKey: process.env.ANTHROPIC_API_KEY || ''
 });
-
-export function parsePrompt(prompt: string): StagehandAction[] {
-  const actions: StagehandAction[] = []
-  const lines = prompt.split('\n')
-
-  for (const line of lines) {
-    const trimmed = line.trim().toLowerCase()
-    
-    if (trimmed.startsWith('goto ')) {
-      actions.push({
-        type: 'goto',
-        value: line.slice(5).trim()
-      })
-    } else if (trimmed.startsWith('act ')) {
-      actions.push({
-        type: 'act',
-        value: line.slice(4).trim()
-      })
-    } else if (trimmed.startsWith('extract ')) {
-      actions.push({
-        type: 'extract',
-        value: line.slice(8).trim()
-      })
-    }
-  }
-
-  return actions
-}
-
-async function createBrowserSession() {
-  const browser = await chromium.connect({
-    wsEndpoint: `wss://connect.browserbase.com?apiKey=${process.env.BROWSERBASE_API_KEY}`
-  });
-  const context = browser.contexts[0];
-  const page = context.pages[0];
-  return { browser, context, page };
-}
-
-export { createBrowserSession };

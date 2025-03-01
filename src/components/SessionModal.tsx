@@ -82,7 +82,7 @@ function ActionRow({
           onChange={(e) =>
             onChangeAction(action.id, 'type', e.target.value as ActionType)
           }
-          className="mt-1 block w-32 rounded-md border-gray-500 shadow-sm text-gray-700 bg-white focus:border-blue-500 focus:ring-blue-500"
+          className="mt-1 block w-32 rounded-md border-gray-300 shadow-sm text-gray-700 bg-white focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
         >
           <option value="goto">goto</option>
           <option value="act">act</option>
@@ -104,7 +104,7 @@ function ActionRow({
             ? 'user profile data'
             : 'wait for element to appear'
         }
-        className="mt-1 block w-full rounded-md border-gray-500 shadow-sm text-gray-700 bg-white focus:border-blue-500 focus:ring-blue-500"
+        className="mt-1 block w-full rounded-md border-gray-300 shadow-sm text-gray-700 bg-white focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
       />
 
       <button
@@ -121,16 +121,20 @@ function ActionRow({
 type ModalProps = {
   isOpen: boolean;
   onClose: () => void;
+  onSessionsCreated?: () => void;
 };
 
-export default function SessionModal({ isOpen, onClose }: ModalProps) {
+export default function SessionModal({
+  isOpen,
+  onClose,
+  onSessionsCreated,
+}: ModalProps) {
   const [actions, setActions] = useState<Action[]>([
     { id: '1', type: 'goto', value: '' },
     { id: '2', type: 'act', value: '' },
-    { id: '3', type: 'extract', value: '' },
-    { id: '4', type: 'observe', value: '' },
   ]);
   const [sessionCount, setSessionCount] = useState(1);
+  const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const sensors = useSensors(
@@ -179,13 +183,44 @@ export default function SessionModal({ isOpen, onClose }: ModalProps) {
     }
   };
 
+  const validateActions = () => {
+    // Check if any action is empty
+    const emptyActions = actions.filter((action) => !action.value.trim());
+    if (emptyActions.length > 0) {
+      return 'All actions must have a value';
+    }
+
+    // Make sure at least one "goto" action exists
+    const hasGoto = actions.some((action) => action.type === 'goto');
+    if (!hasGoto) {
+      return 'At least one "goto" action is required';
+    }
+
+    return null;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
 
+    // Validate actions before submitting
+    const validationError = validateActions();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    setIsCreating(true);
+
     try {
+      // Format actions for the API
+      const formattedActions = actions.map(({ type, value }) => ({
+        type,
+        value,
+      }));
+
       const sessionData = {
-        actions: actions.map(({ ...action }) => action),
+        actions: formattedActions,
         options: {
           browser: 'chromium',
           device: 'desktop',
@@ -202,21 +237,31 @@ export default function SessionModal({ isOpen, onClose }: ModalProps) {
         body: JSON.stringify(sessionData),
       });
 
-      const data = await response.json();
-
       if (!response.ok) {
+        const data = await response.json();
         throw new Error(data.error || 'Failed to create session');
       }
 
-      // If first one succeeds, create the rest
+      const data = await response.json();
+      console.log('First session created:', data);
+
+      // If first one succeeds and user requested multiple sessions, create the rest
       if (sessionCount > 1) {
+        console.log(`Creating ${sessionCount - 1} additional sessions...`);
+
         const remainingPromises = Array.from({ length: sessionCount - 1 }, () =>
           fetch('/api/sessions', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify(sessionData),
+            body: JSON.stringify({
+              ...sessionData,
+              options: {
+                ...sessionData.options,
+                utm_params: generateUtm(), // Generate unique UTM params for each session
+              },
+            }),
           }).then(async (response) => {
             if (!response.ok) {
               const error = await response.json();
@@ -229,20 +274,43 @@ export default function SessionModal({ isOpen, onClose }: ModalProps) {
         await Promise.all(remainingPromises);
       }
 
+      // Notify parent component of successful session creation
+      if (onSessionsCreated) {
+        onSessionsCreated();
+      }
+
+      // Close the modal
       onClose();
     } catch (err) {
-      console.error('Detailed error:', err);
+      console.error('Session creation error:', err);
       setError(
         err instanceof Error
           ? err.message
           : 'Failed to create sessions. Please try again.'
       );
+    } finally {
+      setIsCreating(false);
     }
+  };
+
+  const resetForm = () => {
+    setActions([
+      { id: '1', type: 'goto', value: '' },
+      { id: '2', type: 'act', value: '' },
+    ]);
+    setSessionCount(1);
+    setError(null);
   };
 
   return (
     <Transition appear show={isOpen} as={Fragment}>
-      <Dialog as="div" className="relative z-10" onClose={onClose}>
+      <Dialog
+        as="div"
+        className="relative z-10"
+        onClose={() => {
+          if (!isCreating) onClose();
+        }}
+      >
         <Transition.Child
           as={Fragment}
           enter="ease-out duration-300"
@@ -296,8 +364,16 @@ export default function SessionModal({ isOpen, onClose }: ModalProps) {
                           )
                         )
                       }
-                      className="text-gray-700 mt-1 block w-32 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                      className="mt-1 block w-32 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                      disabled={isCreating}
                     />
+                  </div>
+
+                  <div className="mb-2">
+                    <p className="text-sm text-gray-500">
+                      Add at least one &apos;goto&apos; action followed by other
+                      actions to simulate a user session.
+                    </p>
                   </div>
 
                   <DndContext
@@ -326,6 +402,7 @@ export default function SessionModal({ isOpen, onClose }: ModalProps) {
                     type="button"
                     onClick={handleAddAction}
                     className="mt-4 inline-flex items-center px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900 border border-gray-300 rounded-md hover:bg-gray-50"
+                    disabled={isCreating}
                   >
                     <PlusIcon className="h-4 w-4 mr-1" />
                     Add Action
@@ -338,16 +415,21 @@ export default function SessionModal({ isOpen, onClose }: ModalProps) {
                   <div className="mt-6 flex justify-end space-x-3">
                     <button
                       type="button"
-                      onClick={onClose}
+                      onClick={() => {
+                        resetForm();
+                        onClose();
+                      }}
                       className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                      disabled={isCreating}
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
-                      className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                      className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-indigo-400 disabled:cursor-not-allowed"
+                      disabled={isCreating}
                     >
-                      Create
+                      {isCreating ? 'Creating...' : 'Create'}
                     </button>
                   </div>
                 </form>
